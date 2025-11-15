@@ -1,0 +1,26 @@
+[project]
+name = "hl-metrics"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "altair>=6.0.0",
+    "boto3>=1.40.69",
+    "duckdb>=1.4.1",
+    "ipykernel>=7.1.0",
+    "jupyter>=1.1.1",
+    "lz4>=4.4.5",
+    "marimo>=0.17.7",
+    "matplotlib>=3.10.7",
+    "plotly>=6.4.0",
+    "polars>=1.35.1",
+    "pyarrow>=22.0.0",
+    "seaborn>=0.13.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.14.4",
+    "ty>=0.0.1a25",
+]
