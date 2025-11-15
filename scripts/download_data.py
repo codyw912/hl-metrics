@@ -2,202 +2,359 @@
 """
 Download Hyperliquid trade fills data from S3.
 
-This script downloads objects from the requester-pays S3 bucket with progress tracking.
-Downloads from all three trade data locations:
-- node_fills_by_block/ (current format)
-- node_fills/ (legacy, API format)
-- node_trades/ (legacy, alternative format)
+This script downloads objects from the requester-pays S3 bucket with:
+- Date range filtering
+- Path selection (current/legacy formats)
+- Parallel downloads
+- Progress tracking
+- Resume capability
 """
 
-import boto3
-from datetime import datetime, timezone
-from pathlib import Path
+import argparse
 import sys
-from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import boto3
+from tqdm import tqdm
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from s3_utils import (
+    HYPERLIQUID_BUCKET,
+    HYPERLIQUID_PATHS,
+    check_aws_credentials,
+    format_size,
+    list_s3_objects,
+    calculate_download_cost,
+)
 
 
-def list_s3_objects(bucket: str, prefix: str) -> List[dict]:
-    """List all objects in an S3 requester-pays bucket prefix."""
-    s3_client = boto3.client("s3")
+def download_file(
+    s3_client, bucket: str, key: str, output_path: Path
+) -> tuple[bool, int]:
+    """
+    Download a single file from S3.
 
-    objects = []
-    continuation_token = None
-
-    print(f"  Listing objects in s3://{bucket}/{prefix}...", end=" ", flush=True)
-
-    while True:
-        params = {
-            "Bucket": bucket,
-            "Prefix": prefix,
-            "RequestPayer": "requester",
-            "MaxKeys": 1000,
-        }
-
-        if continuation_token:
-            params["ContinuationToken"] = continuation_token
-
-        try:
-            response = s3_client.list_objects_v2(**params)
-        except Exception as e:
-            print(f"\n  Error listing objects: {e}")
-            sys.exit(1)
-
-        if "Contents" in response:
-            for obj in response["Contents"]:
-                objects.append(
-                    {
-                        "Key": obj["Key"],
-                        "Size": obj["Size"],
-                        "LastModified": obj["LastModified"],
-                    }
-                )
-
-        if not response.get("IsTruncated", False):
-            break
-
-        continuation_token = response.get("NextContinuationToken")
-
-    print(f"Found {len(objects):,} objects")
-    return objects
-
-
-def format_size(bytes_size: float) -> str:
-    """Format bytes into human-readable size."""
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if bytes_size < 1024.0:
-            return f"{bytes_size:.2f} {unit}"
-        bytes_size /= 1024.0
-    return f"{bytes_size:.2f} PB"
-
-
-def download_file(s3_client, bucket: str, key: str, output_path: Path) -> bool:
-    """Download a single file from S3."""
+    Returns:
+        Tuple of (success, bytes_downloaded)
+    """
     try:
-        # Create parent directories if they don't exist
+        # Create parent directories
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Download with requester pays
         s3_client.download_file(
             bucket, key, str(output_path), ExtraArgs={"RequestPayer": "requester"}
         )
-        return True
+
+        return True, output_path.stat().st_size
     except Exception as e:
-        print(f"Error downloading {key}: {e}")
-        return False
+        return False, 0
+
+
+def download_files_parallel(
+    bucket: str,
+    objects: list[dict],
+    output_dir: Path,
+    max_workers: int = 10,
+) -> tuple[int, int, int]:
+    """
+    Download files in parallel with progress tracking.
+
+    Returns:
+        Tuple of (downloaded, skipped, failed)
+    """
+    s3_client = boto3.client("s3")
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+
+    # Calculate total size for progress bar
+    total_size = sum(obj["Size"] for obj in objects)
+
+    # Check which files already exist
+    download_queue = []
+    for obj in objects:
+        output_path = output_dir / obj["Key"]
+
+        # Skip if already exists with correct size
+        if output_path.exists() and output_path.stat().st_size == obj["Size"]:
+            skipped += 1
+        else:
+            download_queue.append(obj)
+
+    if skipped > 0:
+        print(f"  ⏭️  Skipping {skipped:,} files (already downloaded)")
+
+    if not download_queue:
+        print("  ✓ All files already downloaded!")
+        return 0, skipped, 0
+
+    print(
+        f"  📥 Downloading {len(download_queue):,} files ({format_size(sum(o['Size'] for o in download_queue))})..."
+    )
+
+    # Progress bar
+    with tqdm(
+        total=sum(obj["Size"] for obj in download_queue),
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        desc="  Downloading",
+    ) as pbar:
+        # Download in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all download tasks
+            future_to_obj = {
+                executor.submit(
+                    download_file,
+                    s3_client,
+                    bucket,
+                    obj["Key"],
+                    output_dir / obj["Key"],
+                ): obj
+                for obj in download_queue
+            }
+
+            # Process completed downloads
+            for future in as_completed(future_to_obj):
+                obj = future_to_obj[future]
+                success, bytes_downloaded = future.result()
+
+                if success:
+                    downloaded += 1
+                    pbar.update(bytes_downloaded)
+                else:
+                    failed += 1
+
+    return downloaded, skipped, failed
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Download Hyperliquid trade data from S3",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Download all available data
+  uv run scripts/download_data.py
+  
+  # Download only current format
+  uv run scripts/download_data.py --paths current
+  
+  # Download last 30 days
+  uv run scripts/download_data.py --last-days 30
+  
+  # Download specific date range
+  uv run scripts/download_data.py --start-date 2025-11-08 --end-date 2025-11-15
+  
+  # Dry run (see what would be downloaded)
+  uv run scripts/download_data.py --dry-run
+  
+  # Faster downloads with more parallel workers
+  uv run scripts/download_data.py --workers 20
+        """,
+    )
+
+    parser.add_argument(
+        "--paths",
+        type=str,
+        default="current",
+        help="Which paths to download: current, legacy_fills, legacy_trades, or 'all' (default: current)",
+    )
+
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        help="Start date (YYYY-MM-DD, inclusive)",
+    )
+
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        help="End date (YYYY-MM-DD, inclusive)",
+    )
+
+    parser.add_argument(
+        "--last-days",
+        type=int,
+        help="Download only last N days of data",
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=10,
+        help="Number of parallel download workers (default: 10)",
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("./data/hyperliquid"),
+        help="Output directory (default: ./data/hyperliquid)",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be downloaded without actually downloading",
+    )
+
+    return parser.parse_args()
 
 
 def main():
-    # Configuration
-    BUCKET = "hl-mainnet-node-data"
-    OUTPUT_DIR = Path("./data/hyperliquid")
+    args = parse_args()
 
-    # All three trade data paths
-    PATHS = [
-        ("node_trades/", "Legacy format (alternative)"),
-        ("node_fills/", "Legacy format (API format)"),
-        ("node_fills_by_block/", "Current format (batched by block)"),
-    ]
+    # Check AWS credentials first
+    if not check_aws_credentials():
+        return 1
 
     print("=" * 80)
-    print("Hyperliquid Trade Fills Data Downloader")
+    print("Hyperliquid Trade Data Downloader")
     print("=" * 80)
     print()
-    print(f"Output directory: {OUTPUT_DIR}")
-    print()
-    print("This will download data from all three trade data locations:")
-    for prefix, desc in PATHS:
-        print(f"  - {prefix} ({desc})")
+
+    # Parse date range
+    end_date = datetime.now(timezone.utc)
+    start_date = None
+
+    if args.last_days:
+        start_date = end_date - timedelta(days=args.last_days)
+        print(f"📅 Date range: Last {args.last_days} days")
+        print(f"   {start_date.date()} to {end_date.date()}")
+    elif args.start_date or args.end_date:
+        if args.start_date:
+            start_date = datetime.strptime(args.start_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+        if args.end_date:
+            end_date = datetime.strptime(args.end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        print(
+            f"📅 Date range: {start_date.date() if start_date else 'beginning'} to {end_date.date()}"
+        )
+    else:
+        print("📅 Date range: All available data")
+
     print()
 
-    # List all objects from all paths
-    print("Scanning S3 buckets...")
+    # Parse paths
+    if args.paths == "all":
+        selected_paths = list(HYPERLIQUID_PATHS.keys())
+    else:
+        selected_paths = [p.strip() for p in args.paths.split(",")]
+
+        # Validate paths
+        invalid = [p for p in selected_paths if p not in HYPERLIQUID_PATHS]
+        if invalid:
+            print(f"❌ Error: Invalid path(s): {', '.join(invalid)}")
+            print(f"   Valid options: {', '.join(HYPERLIQUID_PATHS.keys())}, all")
+            return 1
+
+    print("📂 Data sources:")
+    for path_key in selected_paths:
+        prefix, description = HYPERLIQUID_PATHS[path_key]
+        print(f"   - {prefix} ({description})")
+    print()
+
+    # List objects from selected paths
+    print("🔍 Scanning S3 bucket...")
     print()
 
     all_objects = []
-    for prefix, desc in PATHS:
-        print(f"{desc}:")
-        objects = list_s3_objects(BUCKET, prefix)
+    total_list_requests = 0
+
+    for path_key in selected_paths:
+        prefix, description = HYPERLIQUID_PATHS[path_key]
+        objects, list_requests = list_s3_objects(
+            HYPERLIQUID_BUCKET, prefix, start_date, end_date, verbose=True
+        )
         all_objects.extend(objects)
-        print()
+        total_list_requests += list_requests
 
     if not all_objects:
-        print("No objects found in any bucket.")
-        return
+        print()
+        print("❌ No files found matching criteria")
+        return 1
 
-    # Calculate total size
+    print()
+
+    # Calculate stats
     total_bytes = sum(obj["Size"] for obj in all_objects)
-    print(
-        f"Total data to download: {format_size(total_bytes)} ({total_bytes / (1024**3):.2f} GB)"
-    )
-    print(f"Number of files: {len(all_objects):,}")
+    total_gb = total_bytes / (1024**3)
 
     # Cost estimate
-    transfer_cost = (total_bytes / (1024**3)) * 0.09
-    request_cost = len(all_objects) * (0.0004 / 1000)
-    total_cost = transfer_cost + request_cost
-    print(f"Estimated cost: ${total_cost:.2f}")
+    costs = calculate_download_cost(total_gb, len(all_objects), total_list_requests)
+
+    print("=" * 80)
+    print("DOWNLOAD SUMMARY")
+    print("=" * 80)
     print()
+    print(f"Files to download:    {len(all_objects):,}")
+    print(f"Total size:           {format_size(total_bytes)} ({total_gb:.2f} GB)")
+    print()
+    print("Estimated AWS costs:")
+    print(f"  LIST requests:      ${costs['list_cost']:.4f} (already incurred)")
+    print(f"  GET requests:       ${costs['get_cost']:.4f}")
+    print(f"  Data transfer:      ${costs['transfer_cost']:.2f}")
+    print(f"  TOTAL:              ${costs['total_cost']:.2f}")
+    print()
+    print(f"Output directory:     {args.output_dir}")
+    print(f"Parallel workers:     {args.workers}")
+    print()
+
+    if args.dry_run:
+        print("🔍 DRY RUN - No files will be downloaded")
+        print()
+        print("Sample files (first 10):")
+        for obj in all_objects[:10]:
+            print(f"  {obj['Key']} ({format_size(obj['Size'])})")
+        if len(all_objects) > 10:
+            print(f"  ... and {len(all_objects) - 10:,} more files")
+        return 0
 
     # Confirm before downloading
-    response = input("This will incur AWS costs. Continue? (yes/no): ")
+    response = input("Continue with download? This will incur AWS costs. (yes/no): ")
     if response.lower() not in ["yes", "y"]:
-        print("Download cancelled.")
-        return
-    print()
+        print("❌ Download cancelled")
+        return 0
 
-    # Create S3 client
-    s3_client = boto3.client("s3")
+    print()
+    print("=" * 80)
+    print("DOWNLOADING")
+    print("=" * 80)
+    print()
 
     # Download files
-    downloaded = 0
-    failed = 0
-    skipped = 0
-    downloaded_bytes = 0
-
-    print(f"Starting download of {len(all_objects):,} files...")
-    print()
-
-    for i, obj in enumerate(all_objects, 1):
-        key = obj["Key"]
-        size = obj["Size"]
-
-        # Create output path maintaining the S3 structure
-        output_path = OUTPUT_DIR / key
-
-        # Skip if already exists
-        if output_path.exists() and output_path.stat().st_size == size:
-            if i % 100 == 0:  # Only print every 100 skipped files to reduce noise
-                print(f"[{i}/{len(all_objects)}] Skipping (already exists): {key}")
-            skipped += 1
-            downloaded_bytes += size
-            continue
-
-        print(f"[{i}/{len(all_objects)}] Downloading: {key} ({format_size(size)})")
-
-        if download_file(s3_client, BUCKET, key, output_path):
-            downloaded += 1
-            downloaded_bytes += size
-        else:
-            failed += 1
-
-        # Progress update every 50 files
-        if i % 50 == 0:
-            progress_pct = (i / len(all_objects)) * 100
-            print(
-                f"Progress: {progress_pct:.1f}% ({downloaded} downloaded, {skipped} skipped, {failed} failed)"
-            )
+    downloaded, skipped, failed = download_files_parallel(
+        HYPERLIQUID_BUCKET, all_objects, args.output_dir, max_workers=args.workers
+    )
 
     print()
     print("=" * 80)
     print("DOWNLOAD COMPLETE")
     print("=" * 80)
-    print(f"Successfully downloaded: {downloaded:,} files")
-    print(f"Skipped (already exists): {skipped:,} files")
-    print(f"Failed: {failed:,} files")
-    print(f"Total data size: {format_size(downloaded_bytes)}")
-    print(f"Output directory: {OUTPUT_DIR}")
     print()
+    print(f"✓ Downloaded:         {downloaded:,} files")
+    print(f"⏭️  Skipped:            {skipped:,} files (already existed)")
+    if failed > 0:
+        print(f"❌ Failed:             {failed:,} files")
+    print(f"📁 Output directory:   {args.output_dir}")
+    print()
+
+    if failed > 0:
+        print("⚠️  Some files failed to download. Run the script again to retry.")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

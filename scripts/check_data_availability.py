@@ -2,72 +2,25 @@
 """
 Check availability of Hyperliquid trade data across all S3 paths.
 
-This script checks all three trade data locations:
-- node_fills_by_block/ (current format)
-- node_fills/ (legacy, API format)
-- node_trades/ (legacy, different format)
+This script checks all three trade data locations and provides overview statistics.
 """
 
-import boto3
-from datetime import datetime, timezone
-from typing import List, Dict
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from s3_utils import (
+    HYPERLIQUID_BUCKET,
+    HYPERLIQUID_PATHS,
+    check_aws_credentials,
+    format_size,
+    list_s3_objects,
+    calculate_download_cost,
+)
 
 
-def list_s3_objects_simple(bucket: str, prefix: str) -> List[dict]:
-    """List all objects in an S3 prefix."""
-    s3_client = boto3.client("s3")
-
-    objects = []
-    continuation_token = None
-
-    print(f"  Scanning s3://{bucket}/{prefix}...", end=" ", flush=True)
-
-    while True:
-        params = {
-            "Bucket": bucket,
-            "Prefix": prefix,
-            "RequestPayer": "requester",
-            "MaxKeys": 1000,
-        }
-
-        if continuation_token:
-            params["ContinuationToken"] = continuation_token
-
-        try:
-            response = s3_client.list_objects_v2(**params)
-        except Exception as e:
-            print(f"\n  Error: {e}")
-            return objects
-
-        if "Contents" in response:
-            for obj in response["Contents"]:
-                objects.append(
-                    {
-                        "Key": obj["Key"],
-                        "Size": obj["Size"],
-                        "LastModified": obj["LastModified"],
-                    }
-                )
-
-        if not response.get("IsTruncated", False):
-            break
-
-        continuation_token = response.get("NextContinuationToken")
-
-    print(f"Found {len(objects):,} objects")
-    return objects
-
-
-def format_size(bytes_size: float) -> str:
-    """Format bytes into human-readable size."""
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if bytes_size < 1024.0:
-            return f"{bytes_size:.2f} {unit}"
-        bytes_size /= 1024.0
-    return f"{bytes_size:.2f} PB"
-
-
-def analyze_objects(objects: List[dict], name: str) -> Dict:
+def analyze_objects(objects: list[dict], name: str) -> dict | None:
     """Analyze a list of objects and return summary stats."""
     if not objects:
         return None
@@ -90,14 +43,9 @@ def analyze_objects(objects: List[dict], name: str) -> Dict:
 
 
 def main():
-    BUCKET = "hl-mainnet-node-data"
-
-    # Three different trade data paths
-    PATHS = [
-        ("node_fills_by_block/", "Current format (batched by block)"),
-        ("node_fills/", "Legacy format (API format)"),
-        ("node_trades/", "Legacy format (alternative)"),
-    ]
+    # Check AWS credentials first
+    if not check_aws_credentials():
+        return 1
 
     print("=" * 80)
     print("Hyperliquid Trade Data Availability Check")
@@ -107,10 +55,14 @@ def main():
     print()
 
     results = []
+    total_list_requests = 0
 
-    for prefix, description in PATHS:
-        print(f"\n{description}:")
-        objects = list_s3_objects_simple(BUCKET, prefix)
+    for path_key, (prefix, description) in HYPERLIQUID_PATHS.items():
+        print(f"{description}:")
+        objects, list_requests = list_s3_objects(
+            HYPERLIQUID_BUCKET, prefix, verbose=True
+        )
+        total_list_requests += list_requests
 
         if objects:
             analysis = analyze_objects(objects, description)
@@ -118,7 +70,8 @@ def main():
         else:
             print("  No data found")
 
-    print()
+        print()
+
     print("=" * 80)
     print("SUMMARY")
     print("=" * 80)
@@ -126,7 +79,7 @@ def main():
 
     if not results:
         print("No trade data found in any location.")
-        return
+        return 1
 
     # Sort by earliest date
     results.sort(key=lambda x: x["earliest"])
@@ -163,21 +116,26 @@ def main():
         )
         print()
 
-    # Cost estimate for all data
-    DATA_TRANSFER_COST_PER_GB = 0.09  # First 10TB
-    GET_REQUEST_COST = 0.0004 / 1000
-
-    transfer_cost = total_gb * DATA_TRANSFER_COST_PER_GB
-    request_cost = total_files * GET_REQUEST_COST
-    total_cost = transfer_cost + request_cost
+    # Cost estimate
+    costs = calculate_download_cost(total_gb, total_files, total_list_requests)
 
     print("Estimated cost to download ALL trade data:")
-    print(f"  Data transfer:  ${transfer_cost:.2f}")
-    print(f"  GET requests:   ${request_cost:.2f}")
-    print(f"  TOTAL:          ${total_cost:.2f}")
+    print(f"  LIST requests:  ${costs['list_cost']:.4f} (already incurred)")
+    print(f"  GET requests:   ${costs['get_cost']:.4f}")
+    print(f"  Data transfer:  ${costs['transfer_cost']:.2f}")
+    print(f"  TOTAL:          ${costs['total_cost']:.2f}")
+    print()
+    print("💡 Tip: Download only what you need to save costs!")
+    print("   - Use --last-days to download recent data only")
+    print("   - Use --paths current to skip legacy formats")
+    print(
+        "   - Example: uv run scripts/download_data.py --last-days 90 --paths current"
+    )
     print()
     print("=" * 80)
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

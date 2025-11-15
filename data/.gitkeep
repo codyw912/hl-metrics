@@ -12,8 +12,8 @@ This directory contains raw and processed data files (excluded from git).
 Run the data pipeline scripts:
 
 ```bash
-python scripts/download_data.py
-python scripts/normalize_data.py
+uv run scripts/download_data.py
+uv run scripts/normalize_data.py
 ```
 
 See the main README for details.

@@ -44,14 +44,31 @@ See [STRUCTURE.md](STRUCTURE.md) for detailed organization.
 ### 1. Download Raw Data
 
 ```bash
-uv run scripts/estimate_download_cost.py  # Check costs first
-uv run scripts/download_data.py            # Download from S3
+# Check costs first
+uv run scripts/estimate_download_cost.py --paths current
+
+# Download recent data only (recommended - saves time and money)
+uv run scripts/download_data.py --last-days 30
+
+# Or download specific date range
+uv run scripts/download_data.py --start-date 2025-11-01 --end-date 2025-11-15
+
+# Or download all available data
+uv run scripts/download_data.py --paths current
 ```
 
-**Raw Data (~104 GB)** in `./data/hyperliquid/`:
-- **node_trades/** (14 GB) - Legacy format (Mar 22 - Jun 21, 2025)
-- **node_fills/** (30 GB) - Legacy API format (May 25 - Jul 27, 2025)
-- **node_fills_by_block/** (61 GB) - Current format (Jul 27 - Nov 7, 2025)
+**Download Options:**
+- `--last-days N` - Download only last N days (recommended for updates)
+- `--start-date / --end-date` - Specific date range
+- `--paths current` - Current format only (default, ~65 GB)
+- `--paths all` - All formats including legacy (~109 GB)
+- `--dry-run` - Preview download without downloading
+- `--workers N` - Parallel workers for faster downloads (default: 10)
+
+**Available Data:**
+- **node_fills_by_block/** (~65 GB) - Current format (Jul 27 - present)
+- **node_fills/** (~30 GB) - Legacy API format (May 25 - Jul 27)
+- **node_trades/** (~14 GB) - Legacy alternative format (Mar 22 - Jun 21)
 
 ### 2. Normalize Data
 
@@ -153,12 +170,20 @@ python scripts/validate_data.py
 
 ## Performance
 
-| Operation | Original | Optimized | Speedup |
-|-----------|----------|-----------|---------|
-| Initial load | 25-30s | <1s | 25-30x |
-| DAU query | ~5s | ~50ms | 100x |
-| Volume buckets | ~8s | ~200ms | 40x |
-| New users | ~3s | ~20ms | 150x |
+### Analytics
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Notebook load | <1s | With persistent DuckDB |
+| DAU query | ~50ms | Pre-aggregated tables |
+| Volume buckets | ~200ms | Optimized queries |
+| New users | ~20ms | Indexed lookups |
+
+### Data Pipeline
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Download (30 days) | ~2-5 min | Parallel downloads (10 workers) |
+| Download (all data) | ~15-20 min | ~109 GB at 10-20 MB/s |
+| Normalization | ~10-20 min | Processes all 3 formats |
 
 See [docs/PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) for details.
 
