@@ -323,6 +323,17 @@ def get_all_dates() -> List[date]:
 
 def main():
     """Main normalization pipeline."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Normalize Hyperliquid trade data")
+    parser.add_argument(
+        "--yes", "-y", action="store_true", help="Skip confirmation prompts"
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true", help="Reduce output verbosity"
+    )
+    args = parser.parse_args()
+
     output_dir = Path("./data/processed/fills.parquet")
 
     print("=" * 80)
@@ -347,10 +358,19 @@ def main():
 
     if existing_dates:
         print(f"Found {len(existing_dates)} already processed dates")
-        response = input("Skip already processed dates? (yes/no): ")
-        skip_existing = response.lower() in ["yes", "y"]
+        if args.yes:
+            skip_existing = True
+            print("Auto-skipping already processed dates (--yes flag)")
+        else:
+            response = input("Skip already processed dates? (yes/no): ")
+            skip_existing = response.lower() in ["yes", "y"]
     else:
         skip_existing = False
+
+    if skip_existing and existing_dates:
+        print(
+            f"⏭️  Skipping {len(existing_dates)} already processed dates (use --quiet to hide)"
+        )
 
     print()
 
@@ -360,7 +380,10 @@ def main():
 
     for i, target_date in enumerate(all_dates, 1):
         if skip_existing and target_date in existing_dates:
-            print(f"[{i}/{len(all_dates)}] Skipping {target_date} (already processed)")
+            if not args.quiet:
+                print(
+                    f"[{i}/{len(all_dates)}] Skipping {target_date} (already processed)"
+                )
             continue
 
         print(

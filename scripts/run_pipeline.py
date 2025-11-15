@@ -174,7 +174,7 @@ def main():
 
     # Step 2: Normalize
     if not args.skip_normalize:
-        normalize_cmd = ["uv", "run", "scripts/normalize_data.py"]
+        normalize_cmd = ["uv", "run", "scripts/normalize_data.py", "--yes", "--quiet"]
 
         if not run_command(normalize_cmd, "Step 2: Normalize data"):
             print()

@@ -148,7 +148,7 @@ DATASET_CONFIG = {
     },
     "node_fills_by_block": {
         "path": "data/hyperliquid/node_fills_by_block/hourly",
-        "date_range": ("2025-07-27", "2025-11-07"),
+        "date_range": ("2025-07-27", "2099-12-31"),  # Current format, open-ended
         "priority": 1,  # Highest priority (most complete format)
     },
 }
