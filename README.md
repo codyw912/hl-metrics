@@ -9,11 +9,11 @@ Data normalization and analytics pipeline for Hyperliquid historical trade data 
 uv sync
 
 # Download and process data
-python scripts/download_data.py
-python scripts/normalize_data.py
+uv run scripts/download_data.py
+uv run scripts/normalize_data.py
 
 # Launch interactive analytics notebook
-marimo edit notebooks/hl_research.py
+uv run marimo edit notebooks/hl_research.py
 ```
 
 ## Overview
@@ -44,8 +44,8 @@ See [STRUCTURE.md](STRUCTURE.md) for detailed organization.
 ### 1. Download Raw Data
 
 ```bash
-python scripts/estimate_download_cost.py  # Check costs first
-python scripts/download_data.py            # Download from S3
+uv run scripts/estimate_download_cost.py  # Check costs first
+uv run scripts/download_data.py            # Download from S3
 ```
 
 **Raw Data (~104 GB)** in `./data/hyperliquid/`:
@@ -56,8 +56,8 @@ python scripts/download_data.py            # Download from S3
 ### 2. Normalize Data
 
 ```bash
-python scripts/normalize_data.py
-python scripts/validate_data.py  # Optional: verify integrity
+uv run scripts/normalize_data.py
+uv run scripts/validate_data.py  # Optional: verify integrity
 ```
 
 **Normalized Data (~40-60 GB)** in `./data/processed/fills.parquet/`:
@@ -69,7 +69,7 @@ python scripts/validate_data.py  # Optional: verify integrity
 ### 3. Build Database (Recommended)
 
 ```bash
-python src/query_data.py
+uv run src/query_data.py
 ```
 
 Creates `data/processed/fills.duckdb` with pre-aggregated tables for instant queries.
@@ -79,7 +79,7 @@ Creates `data/processed/fills.duckdb` with pre-aggregated tables for instant que
 ### Interactive Notebook
 
 ```bash
-marimo edit notebooks/hl_research.py
+uv run marimo edit notebooks/hl_research.py
 ```
 
 Features:
