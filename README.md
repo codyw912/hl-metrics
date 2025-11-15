@@ -8,12 +8,18 @@ Data normalization and analytics pipeline for Hyperliquid historical trade data 
 # Install dependencies
 uv sync
 
-# Download and process data
-uv run scripts/download_data.py
-uv run scripts/normalize_data.py
+# Run the complete pipeline (download, normalize, build DB)
+uv run scripts/run_pipeline.py --last-days 30
 
 # Launch interactive analytics notebook
 uv run marimo edit notebooks/hl_research.py
+```
+
+**Or run steps individually:**
+```bash
+uv run scripts/download_data.py --last-days 30 --yes
+uv run scripts/normalize_data.py
+uv run src/query_data.py
 ```
 
 ## Overview

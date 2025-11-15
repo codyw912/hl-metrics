@@ -205,6 +205,13 @@ Examples:
         help="Show what would be downloaded without actually downloading",
     )
 
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
+
     return parser.parse_args()
 
 
@@ -321,10 +328,13 @@ def main():
         return 0
 
     # Confirm before downloading
-    response = input("Continue with download? This will incur AWS costs. (yes/no): ")
-    if response.lower() not in ["yes", "y"]:
-        print("❌ Download cancelled")
-        return 0
+    if not args.yes:
+        response = input(
+            "Continue with download? This will incur AWS costs. (yes/no): "
+        )
+        if response.lower() not in ["yes", "y"]:
+            print("❌ Download cancelled")
+            return 0
 
     print()
     print("=" * 80)
