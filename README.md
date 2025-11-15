@@ -182,7 +182,11 @@ See [docs/PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) for det
 
 ## Notes
 
-- **Storage**: Ensure ~150-200 GB free space for raw + processed data
+- **Storage**: Full pipeline requires ~150-170 GB:
+  - Raw data: ~104 GB (can be deleted after normalization)
+  - Processed parquet: ~40-60 GB (can be deleted after building DuckDB)
+  - DuckDB database: ~2-5 GB (required for analytics)
+  - *Tip: After setup, delete `data/hyperliquid/` and `data/processed/fills.parquet/` to keep only the DuckDB file*
 - **Memory**: 4-8 GB RAM recommended for analytics
 - **Network**: S3 downloads are ~104 GB (egress charges apply)
 - **Time**: Initial download ~30-60 min, normalization ~10-20 min
