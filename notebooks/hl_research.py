@@ -58,7 +58,7 @@ def _(load_data_toggle, lru_cache, mo, rebuild_toggle):
     import sys
 
     sys.path.insert(0, "../src")
-    from query_data_optimized import HyperliquidAnalytics
+    from query_data import HyperliquidAnalytics
 
     @lru_cache(maxsize=1)
     def get_analytics(data_dir: str, db_path: str, rebuild: bool):

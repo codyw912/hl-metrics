@@ -13,7 +13,7 @@ python scripts/download_data.py
 python scripts/normalize_data.py
 
 # Launch interactive analytics notebook
-marimo edit notebooks/hl_research_optimized.py
+marimo edit notebooks/hl_research.py
 ```
 
 ## Overview
@@ -66,20 +66,20 @@ python scripts/validate_data.py  # Optional: verify integrity
 - Overlap periods deduplicated (prefers newer format)
 - Efficient columnar storage with Snappy compression
 
-### 3. Build Optimized Database (Recommended)
+### 3. Build Database (Recommended)
 
 ```bash
-python src/query_data_optimized.py
+python src/query_data.py
 ```
 
 Creates `data/processed/fills.duckdb` with pre-aggregated tables for instant queries.
 
 ## Analytics
 
-### Interactive Notebook (Recommended)
+### Interactive Notebook
 
 ```bash
-marimo edit notebooks/hl_research_optimized.py
+marimo edit notebooks/hl_research.py
 ```
 
 Features:
@@ -90,12 +90,12 @@ Features:
 - Asset trading activity
 - Summary reports
 
-**Performance**: Instant load, <1s queries with optimized backend.
+**Performance**: Instant load, <1s queries.
 
 ### Query Interface
 
 ```python
-from src.query_data_optimized import HyperliquidAnalytics
+from src.query_data import HyperliquidAnalytics
 
 analytics = HyperliquidAnalytics(
     data_dir='./data/processed/fills.parquet',
@@ -172,13 +172,12 @@ See [docs/PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) for det
 - `estimate_download_cost.py` - Estimate S3 costs
 
 ### Source (`src/`)
-- `query_data_optimized.py` - Optimized analytics (recommended)
-- `query_data.py` - Original analytics interface
+- `query_data.py` - Analytics interface with DuckDB optimization
 - `schema.py` - Data schema definitions
 
 ### Notebooks (`notebooks/`)
-- `hl_research_optimized.py` - Main analytics notebook (use this!)
-- `hl_research_altair.py` - Original notebook (reference)
+- `hl_research.py` - Main analytics notebook
+- `hl_user_study.py` - User study template
 
 ## Notes
 
