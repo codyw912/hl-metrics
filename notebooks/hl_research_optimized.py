@@ -67,8 +67,8 @@ def _(load_data_toggle, lru_cache, mo, rebuild_toggle):
 
     # Initialize only if toggle is on
     if load_data_toggle.value:
-        data_dir = "./data/processed/fills.parquet"
-        db_path = "./data/processed/fills.duckdb"
+        data_dir = "../data/processed/fills.parquet"
+        db_path = "../data/processed/fills.duckdb"
         analytics = get_analytics(data_dir, db_path, rebuild_toggle.value)
         summary = analytics.get_data_summary()
 

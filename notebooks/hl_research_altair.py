@@ -45,7 +45,7 @@ def _():
 @app.cell
 def _(HyperliquidAnalytics):
     # Initialize analytics interface
-    data_dir = "./data/processed/fills.parquet"
+    data_dir = "../data/processed/fills.parquet"
     analytics = HyperliquidAnalytics(data_dir=data_dir)
     summary = analytics.get_data_summary()
     print("Dataset Summary:")
