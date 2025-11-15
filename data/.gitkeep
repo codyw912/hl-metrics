@@ -1,0 +1,19 @@
+# Data directory
+
+This directory contains raw and processed data files (excluded from git).
+
+## Structure
+
+- `hyperliquid/` - Raw data downloaded from S3 (~104 GB)
+- `processed/` - Normalized parquet files (~40-60 GB)
+
+## Setup
+
+Run the data pipeline scripts:
+
+```bash
+python scripts/download_data.py
+python scripts/normalize_data.py
+```
+
+See the main README for details.

@@ -1,5 +1,6 @@
-# Data directories
-data/
+# Data directories (but allow .gitkeep files)
+data/*
+!data/.gitkeep
 *.parquet
 *.duckdb
 
