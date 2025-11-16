@@ -512,7 +512,254 @@ def _(alt, analytics, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 7. Summary Report
+    ## 7. User Cohorts & Behavior
+    
+    Deep dive into how users move between volume tiers and cohort dynamics.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 7.1 User Mix by Volume Bucket
+    
+    Composition of active users across exclusive volume buckets over time.
+    """)
+    return
+
+
+@app.cell
+def _(alt, analytics, mo, pl):
+    if analytics is None:
+        mo.md("_Enable data loading above_")
+    else:
+        user_buckets_df = analytics.get_user_daily_buckets()
+
+        # Calculate shares
+        _mix_df = user_buckets_df.with_columns(
+            pl.col("user_count")
+            / pl.col("user_count").sum().over("date").alias("share")
+        )
+
+        _bucket_order_mix = [
+            "< $1,000",
+            "$1,000 - $10,000",
+            "$10,000 - $100,000",
+            ">= $100,000",
+        ]
+        _colors_mix = ["#B3CDE3", "#6497B1", "#005B96", "#03396C"]
+
+        # Normalized stacked area chart
+        _mix_chart = (
+            alt.Chart(_mix_df)
+            .mark_area()
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y(
+                    "share:Q",
+                    stack="normalize",
+                    title="User Share",
+                    axis=alt.Axis(format="%"),
+                ),
+                color=alt.Color(
+                    "volume_bucket:N",
+                    scale=alt.Scale(domain=_bucket_order_mix, range=_colors_mix),
+                    sort=_bucket_order_mix,
+                    title="Volume Bucket",
+                ),
+                tooltip=[
+                    "date:T",
+                    "volume_bucket:N",
+                    alt.Tooltip("share:Q", format=".1%"),
+                    alt.Tooltip("user_count:Q", format=","),
+                ],
+            )
+            .properties(
+                width=1000,
+                height=400,
+                title="Daily User Mix by Volume Bucket (Normalized)",
+            )
+        )
+
+        _mix_chart.display()
+
+        # Summary stats
+        print("\nAverage User Mix:")
+        for _bucket in _bucket_order_mix:
+            _avg_share = (
+                _mix_df.filter(pl.col("volume_bucket") == _bucket)["share"].mean() * 100
+            )
+            print(f"  {_bucket:25s}: {_avg_share:>6.1f}%")
+    return (user_buckets_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 7.2 Bucket Transition Matrix
+    
+    How users move between buckets from one day to the next (day-over-day transitions).
+    """)
+    return
+
+
+@app.cell
+def _(alt, analytics, mo, pl):
+    if analytics is None:
+        mo.md("_Enable data loading above_")
+    else:
+        transitions_df = analytics.get_bucket_transitions()
+
+        _bucket_order_trans = [
+            "< $1,000",
+            "$1,000 - $10,000",
+            "$10,000 - $100,000",
+            ">= $100,000",
+        ]
+
+        # Heatmap
+        _heat = (
+            alt.Chart(transitions_df)
+            .mark_rect()
+            .encode(
+                x=alt.X(
+                    "bucket_t1:N", title="Next Day Bucket", sort=_bucket_order_trans
+                ),
+                y=alt.Y(
+                    "bucket_t:N", title="Current Day Bucket", sort=_bucket_order_trans
+                ),
+                color=alt.Color(
+                    "pct:Q", scale=alt.Scale(scheme="blues"), title="Probability"
+                ),
+                tooltip=[
+                    "bucket_t:N",
+                    "bucket_t1:N",
+                    alt.Tooltip("pct:Q", format=".1%"),
+                    alt.Tooltip("cnt:Q", format=","),
+                ],
+            )
+            .properties(
+                width=500,
+                height=500,
+                title="Day-over-Day Bucket Transition Probabilities",
+            )
+        )
+
+        # Text overlay
+        _text = (
+            alt.Chart(transitions_df)
+            .mark_text(baseline="middle", fontSize=14)
+            .encode(
+                x=alt.X("bucket_t1:N", sort=_bucket_order_trans),
+                y=alt.Y("bucket_t:N", sort=_bucket_order_trans),
+                text=alt.Text("pct:Q", format=".0%"),
+                color=alt.condition(
+                    alt.datum.pct > 0.5, alt.value("white"), alt.value("black")
+                ),
+            )
+        )
+
+        (_heat + _text).display()
+
+        # Calculate retention rates
+        print("\nSame-Bucket Retention (day-over-day):")
+        for _bucket in _bucket_order_trans:
+            _same_pct = transitions_df.filter(
+                (pl.col("bucket_t") == _bucket) & (pl.col("bucket_t1") == _bucket)
+            )["pct"]
+            if len(_same_pct) > 0:
+                print(f"  {_bucket:25s}: {_same_pct[0] * 100:>6.1f}%")
+    return (transitions_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 7.3 Upgrade/Downgrade Dynamics
+    
+    What fraction of users from each starting bucket upgrade or downgrade within 7 and 30 days?
+    """)
+    return
+
+
+@app.cell
+def _(alt, analytics, mo, pl):
+    if analytics is None:
+        mo.md("_Enable data loading above_")
+    else:
+        mobility_df = analytics.get_bucket_mobility()
+
+        # Map rank to labels
+        _rank_labels = {
+            0: "< $1,000",
+            1: "$1,000 - $10,000",
+            2: "$10,000 - $100,000",
+            3: ">= $100,000",
+        }
+        _mobility_labeled = mobility_df.with_columns(
+            pl.col("start_rank").replace(_rank_labels).alias("bucket")
+        )
+
+        # Melt for visualization
+        _mobility_melted = _mobility_labeled.melt(
+            id_vars=["bucket", "horizon", "cohort_size"],
+            value_vars=["upgrade_rate", "downgrade_rate"],
+            variable_name="type",
+            value_name="rate",
+        )
+
+        # Grouped bar chart
+        _mobility_chart = (
+            alt.Chart(_mobility_melted)
+            .mark_bar()
+            .encode(
+                x=alt.X("bucket:N", title="Start Bucket"),
+                y=alt.Y("rate:Q", title="Rate", axis=alt.Axis(format="%")),
+                column=alt.Column("horizon:N", title="Horizon (days)"),
+                color=alt.Color(
+                    "type:N",
+                    scale=alt.Scale(
+                        domain=["upgrade_rate", "downgrade_rate"],
+                        range=["#2CA02C", "#D62728"],
+                    ),
+                    legend=alt.Legend(
+                        title="Movement",
+                        labelExpr="datum.value == 'upgrade_rate' ? 'Upgrade' : 'Downgrade'",
+                    ),
+                ),
+                tooltip=[
+                    "bucket:N",
+                    "horizon:N",
+                    "type:N",
+                    alt.Tooltip("rate:Q", format=".1%"),
+                    alt.Tooltip("cohort_size:Q", format=","),
+                ],
+            )
+            .properties(
+                width=220, height=300, title="Upgrade/Downgrade Rates by Start Bucket"
+            )
+        )
+
+        _mobility_chart.display()
+
+        # Print summary
+        print("\nMobility Rates by Start Bucket:")
+        for _rank, _label in _rank_labels.items():
+            _mob_data = mobility_df.filter(pl.col("start_rank") == _rank)
+            if len(_mob_data) > 0:
+                print(f"\n  {_label}:")
+                for _row in _mob_data.iter_rows(named=True):
+                    print(
+                        f"    {_row['horizon']:2d} days - Upgrade: {_row['upgrade_rate'] * 100:5.1f}%  Downgrade: {_row['downgrade_rate'] * 100:5.1f}%  (cohort: {_row['cohort_size']:,})"
+                    )
+    return (mobility_df,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 8. Summary Report
     """)
     return
 

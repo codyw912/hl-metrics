@@ -299,6 +299,187 @@ class HyperliquidAnalytics:
         """
         return self.conn.execute(query).pl()
 
+    def get_user_daily_buckets(
+        self, buckets: list[float] | None = None
+    ) -> pl.DataFrame:
+        """
+        Get exclusive user counts per bucket per day.
+
+        Args:
+            buckets: Bucket thresholds (default: [1000, 10000, 100000])
+
+        Returns:
+            DataFrame with date, volume_bucket, user_count
+        """
+        if buckets is None:
+            buckets = [1000, 10000, 100000]
+
+        query = f"""
+            WITH user_daily AS (
+                SELECT date, user_address, SUM(daily_volume) AS daily_volume
+                FROM daily_user_volume
+                GROUP BY date, user_address
+            )
+            SELECT
+                date,
+                CASE
+                    WHEN daily_volume < {buckets[0]} THEN '< ${buckets[0]:,.0f}'
+                    WHEN daily_volume < {buckets[1]} THEN '${buckets[0]:,.0f} - ${buckets[1]:,.0f}'
+                    WHEN daily_volume < {buckets[2]} THEN '${buckets[1]:,.0f} - ${buckets[2]:,.0f}'
+                    ELSE '>= ${buckets[2]:,.0f}'
+                END AS volume_bucket,
+                COUNT(*) AS user_count
+            FROM user_daily
+            GROUP BY date, volume_bucket
+            ORDER BY date
+        """
+        return self.conn.execute(query).pl()
+
+    def get_bucket_transitions(
+        self, buckets: list[float] | None = None
+    ) -> pl.DataFrame:
+        """
+        Get day-over-day bucket transition counts.
+
+        Shows how users move between volume buckets from one day to the next.
+
+        Args:
+            buckets: Bucket thresholds (default: [1000, 10000, 100000])
+
+        Returns:
+            DataFrame with bucket_t, bucket_t1, cnt, pct
+        """
+        if buckets is None:
+            buckets = [1000, 10000, 100000]
+
+        query = f"""
+            WITH user_daily AS (
+                SELECT date, user_address, SUM(daily_volume) AS daily_volume
+                FROM daily_user_volume
+                GROUP BY date, user_address
+            ),
+            labeled AS (
+                SELECT
+                    date,
+                    user_address,
+                    CASE
+                        WHEN daily_volume < {buckets[0]} THEN '< ${buckets[0]:,.0f}'
+                        WHEN daily_volume < {buckets[1]} THEN '${buckets[0]:,.0f} - ${buckets[1]:,.0f}'
+                        WHEN daily_volume < {buckets[2]} THEN '${buckets[1]:,.0f} - ${buckets[2]:,.0f}'
+                        ELSE '>= ${buckets[2]:,.0f}'
+                    END AS bucket
+                FROM user_daily
+            ),
+            pairs AS (
+                SELECT
+                    l1.bucket AS bucket_t,
+                    l2.bucket AS bucket_t1,
+                    COUNT(*) AS cnt
+                FROM labeled l1
+                JOIN labeled l2
+                    ON l1.user_address = l2.user_address
+                   AND l2.date = l1.date + INTERVAL 1 DAY
+                GROUP BY l1.bucket, l2.bucket
+            )
+            SELECT
+                bucket_t,
+                bucket_t1,
+                cnt,
+                CAST(cnt AS DOUBLE) / SUM(cnt) OVER (PARTITION BY bucket_t) AS pct
+            FROM pairs
+            ORDER BY bucket_t, bucket_t1
+        """
+        return self.conn.execute(query).pl()
+
+    def get_bucket_mobility(
+        self, horizon_days: list[int] | None = None, buckets: list[float] | None = None
+    ) -> pl.DataFrame:
+        """
+        Get upgrade/downgrade rates from initial bucket.
+
+        For users starting in each bucket, calculates what fraction upgrade or
+        downgrade within N days.
+
+        Args:
+            horizon_days: Days to check (default: [7, 30])
+            buckets: Bucket thresholds (default: [1000, 10000, 100000])
+
+        Returns:
+            DataFrame with start_rank, horizon, upgrade_rate, downgrade_rate
+        """
+        if horizon_days is None:
+            horizon_days = [7, 30]
+        if buckets is None:
+            buckets = [1000, 10000, 100000]
+
+        horizons_str = ", ".join(str(h) for h in horizon_days)
+
+        query = f"""
+            WITH user_daily AS (
+                SELECT date, user_address, SUM(daily_volume) AS daily_volume
+                FROM daily_user_volume
+                GROUP BY date, user_address
+            ),
+            labeled AS (
+                SELECT
+                    date,
+                    user_address,
+                    CASE
+                        WHEN daily_volume < {buckets[0]} THEN 0
+                        WHEN daily_volume < {buckets[1]} THEN 1
+                        WHEN daily_volume < {buckets[2]} THEN 2
+                        ELSE 3
+                    END AS bucket_rank
+                FROM user_daily
+            ),
+            first_day AS (
+                SELECT user_address, MIN(date) AS start_date
+                FROM labeled
+                GROUP BY user_address
+            ),
+            starts AS (
+                SELECT l.user_address, f.start_date, l.bucket_rank AS start_rank
+                FROM first_day f
+                JOIN labeled l ON l.user_address = f.user_address AND l.date = f.start_date
+            ),
+            horizon AS (SELECT UNNEST([{horizons_str}]) AS H),
+            mobility AS (
+                SELECT
+                    s.start_rank,
+                    h.H AS horizon,
+                    COUNT(DISTINCT s.user_address) AS cohort_size,
+                    COUNT(DISTINCT CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM labeled x
+                            WHERE x.user_address = s.user_address
+                              AND x.date > s.start_date
+                              AND x.date <= s.start_date + INTERVAL h.H DAY
+                              AND x.bucket_rank > s.start_rank
+                        ) THEN s.user_address
+                    END) AS any_upgrade,
+                    COUNT(DISTINCT CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM labeled x
+                            WHERE x.user_address = s.user_address
+                              AND x.date > s.start_date
+                              AND x.date <= s.start_date + INTERVAL h.H DAY
+                              AND x.bucket_rank < s.start_rank
+                        ) THEN s.user_address
+                    END) AS any_downgrade
+                FROM starts s CROSS JOIN horizon h
+                GROUP BY s.start_rank, h.H
+            )
+            SELECT
+                start_rank,
+                horizon,
+                CAST(any_upgrade AS DOUBLE) / NULLIF(cohort_size, 0) AS upgrade_rate,
+                CAST(any_downgrade AS DOUBLE) / NULLIF(cohort_size, 0) AS downgrade_rate,
+                cohort_size
+            FROM mobility
+            ORDER BY start_rank, horizon
+        """
+        return self.conn.execute(query).pl()
+
     def get_top_users_by_volume(
         self,
         limit: int = 100,
