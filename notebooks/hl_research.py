@@ -56,8 +56,17 @@ def _(mo):
 def _(load_data_toggle, lru_cache, mo, rebuild_toggle):
     # Lazy initialization with caching
     import sys
+    from pathlib import Path
 
-    sys.path.insert(0, "../src")
+    # Detect project root (works whether run from root or notebooks/)
+    _cwd = Path.cwd()
+    if _cwd.name == "notebooks":
+        _project_root = _cwd.parent
+    else:
+        _project_root = _cwd
+
+    # Add src to path
+    sys.path.insert(0, str(_project_root / "src"))
     from query_data import HyperliquidAnalytics
 
     @lru_cache(maxsize=1)
@@ -67,8 +76,8 @@ def _(load_data_toggle, lru_cache, mo, rebuild_toggle):
 
     # Initialize only if toggle is on
     if load_data_toggle.value:
-        data_dir = "../data/processed/fills.parquet"
-        db_path = "../data/processed/fills.duckdb"
+        data_dir = str(_project_root / "data/processed/fills.parquet")
+        db_path = str(_project_root / "data/processed/fills.duckdb")
         analytics = get_analytics(data_dir, db_path, rebuild_toggle.value)
         summary = analytics.get_data_summary()
 
