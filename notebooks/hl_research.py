@@ -538,8 +538,9 @@ def _(alt, analytics, mo, pl):
 
         # Calculate shares
         _mix_df = user_buckets_df.with_columns(
-            pl.col("user_count")
-            / pl.col("user_count").sum().over("date").alias("share")
+            (pl.col("user_count") / pl.col("user_count").sum().over("date")).alias(
+                "share"
+            )
         )
 
         _bucket_order_mix = [
@@ -698,7 +699,9 @@ def _(alt, analytics, mo, pl):
             3: ">= $100,000",
         }
         _mobility_labeled = mobility_df.with_columns(
-            pl.col("start_rank").replace(_rank_labels).alias("bucket")
+            pl.col("start_rank")
+            .replace_strict(_rank_labels, default=None)
+            .alias("bucket")
         )
 
         # Melt for visualization

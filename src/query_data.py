@@ -453,7 +453,7 @@ class HyperliquidAnalytics:
                             SELECT 1 FROM labeled x
                             WHERE x.user_address = s.user_address
                               AND x.date > s.start_date
-                              AND x.date <= s.start_date + INTERVAL h.H DAY
+                              AND x.date <= s.start_date + h.H
                               AND x.bucket_rank > s.start_rank
                         ) THEN s.user_address
                     END) AS any_upgrade,
@@ -462,7 +462,7 @@ class HyperliquidAnalytics:
                             SELECT 1 FROM labeled x
                             WHERE x.user_address = s.user_address
                               AND x.date > s.start_date
-                              AND x.date <= s.start_date + INTERVAL h.H DAY
+                              AND x.date <= s.start_date + h.H
                               AND x.bucket_rank < s.start_rank
                         ) THEN s.user_address
                     END) AS any_downgrade
